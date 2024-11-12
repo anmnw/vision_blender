@@ -264,6 +264,12 @@ def load_file_data_to_numpy(scene, tmp_file_path, data_map):
         opt_flw[:,:,0] = np.negative(opt_flw[:,:,0])
         #opt_flw[:,:,1] = np.negative(opt_flw[:,:,1]) # Doing the `-` twice is the same as not doing
         return opt_flw
+    elif data_map == 'UV':
+        uv_data = pixels_numpy[:,:,:3] # We are only interested in the first two channels
+        mask = uv_data[:,:,2]<1.0
+        uv_data[mask] = 0.0
+        print(f"{uv_data.shape} {uv_data.sum()}")
+        return uv_data[:,:,:2]
 
 
 def save_data_to_npz(scene, is_stereo_activated,
@@ -274,7 +280,7 @@ def save_data_to_npz(scene, is_stereo_activated,
                       seg_masks_indexes,
                       intrinsic_mat,
                       extrinsic_mat0, extrinsic_mat1,
-                      obj_poses):
+                      obj_poses,uv0,uv1):
     # ref: https://stackoverflow.com/questions/35133317/numpy-save-some-arrays-at-once
     gt_dir_path = os.path.dirname(scene.render.filepath)
     #print(gt_dir_path)
@@ -286,7 +292,8 @@ def save_data_to_npz(scene, is_stereo_activated,
                 'normal_map'                 : normal0,
                 'depth_map'                  : z0,
                 'disparity_map'              : disp0,
-                'object_poses'               : obj_poses
+                'object_poses'               : obj_poses,
+                'uv'                         : uv0
                }
     if is_stereo_activated:
         # Camera 1
@@ -299,7 +306,8 @@ def save_data_to_npz(scene, is_stereo_activated,
                     'normal_map'                 : normal1,
                     'depth_map'                  : z1,
                     'disparity_map'              : disp1,
-                    'object_poses'               : obj_poses
+                    'object_poses'               : obj_poses,
+                    'uv'                         : uv1
                    }
         out_path1 = os.path.join(gt_dir_path, '{:04d}{}.npz'.format(scene.frame_current, suffix1))
         out_dict_filtered1 = {k: v for k, v in out_dict1.items() if v is not None}
@@ -367,6 +375,10 @@ def load_handler_render_init(scene):
         if vision_blender.bool_save_depth:
             slot_depth = node_output.layer_slots.new('####_Depth')
             links.new(rl.outputs["Depth"], slot_depth)
+
+        if vision_blender.bool_save_uv:
+            slot_uv = node_output.layer_slots.new('####_UV')
+            links.new(rl.outputs["UV"], slot_uv)
 
         # 4. Set-up nodes and links for Cycles only (for optical flow and segmentation masks)
         if scene.render.engine == "CYCLES":
@@ -480,6 +492,8 @@ def load_handler_after_rend_frame(scene): # TODO: not sure if this is the best p
         seg_masks_indexes = None
         opt_flw0 = None
         opt_flw1 = None
+        uv0 = None
+        uv1 = None
         if check_if_node_exists(scene.node_tree, 'output_vision_blender'):
             node_output = scene.node_tree.nodes['output_vision_blender']
             TMP_FILES_PATH = node_output.base_path
@@ -522,6 +536,15 @@ def load_handler_after_rend_frame(scene): # TODO: not sure if this is the best p
                         tmp_file_path0 = os.path.join(TMP_FILES_PATH, '{:04d}_Optical_Flow.exr'.format(scene.frame_current))
                     opt_flw0 = load_file_data_to_numpy(scene, tmp_file_path0, 'OptFlow')
             # Optional step - delete the tmp output files
+                if vision_blender.bool_save_uv:
+                    if is_stereo_activated:
+                        tmp_file_path1 = os.path.join(TMP_FILES_PATH, '{:04d}_UV{}.exr'.format(scene.frame_current, suffix1))
+                        uv1 = load_file_data_to_numpy(scene, tmp_file_path1, 'UV')
+                        tmp_file_path0 = os.path.join(TMP_FILES_PATH, '{:04d}_UV{}.exr'.format(scene.frame_current, suffix0))
+                    else:
+                        tmp_file_path0 = os.path.join(TMP_FILES_PATH, '{:04d}_UV.exr'.format(scene.frame_current))
+                    uv0 = load_file_data_to_numpy(scene, tmp_file_path0, 'UV')
+
             clean_folder(TMP_FILES_PATH)
         """ Save data """
         save_data_to_npz(scene, is_stereo_activated,
@@ -532,7 +555,7 @@ def load_handler_after_rend_frame(scene): # TODO: not sure if this is the best p
                          seg_masks_indexes, # Same indexes for both cameras
                          intrinsic_mat, # Both cameras have the same intrinsic parameters
                          extrinsic_mat0, extrinsic_mat1,
-                         obj_poses) # Object poses are relative to the world coordinate frame, so they are the same
+                         obj_poses,uv0,uv1) # Object poses are relative to the world coordinate frame, so they are the same
 
 
 @persistent
@@ -540,7 +563,7 @@ def load_handler_after_rend_finish(scene):
     if check_if_node_exists(scene.node_tree, 'output_vision_blender'):
         node_output = scene.node_tree.nodes['output_vision_blender']
         TMP_FILES_PATH = node_output.base_path
-        shutil.rmtree(TMP_FILES_PATH)
+        #shutil.rmtree(TMP_FILES_PATH)
 
 
 # classes
@@ -579,6 +602,11 @@ class MyAddonProperties(PropertyGroup):
     bool_save_obj_poses : BoolProperty(
         name = "Objects Pose",
         description = "Save object pose",
+        default = True
+        )
+    bool_save_uv : BoolProperty(
+        name = "Object UV Data",
+        description = "Save Object UV Data",
         default = True
         )
 
@@ -661,6 +689,8 @@ class RENDER_PT_gt_generator(GroundTruthGeneratorPanel):
         col.prop(vision_blender, "bool_save_obj_poses", text="Objects' Pose")
         col = flow.column()
         col.prop(vision_blender, "bool_save_cam_param", text="Camera Parameters")
+        col = flow.column()
+        col.prop(vision_blender, "bool_save_uv", text="UV data")
 
         if context.engine != 'CYCLES':
             col = layout.column(align=True)

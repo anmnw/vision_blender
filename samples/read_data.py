@@ -71,7 +71,11 @@ try:
                                tipLength=.03)
         dst = cv.addWeighted(dst, 1.00, arrows, 0.25, 0)
         cv.imshow('Optical Flow: From current to next - arrows', dst)
-
+    if 'uv' in data.files:
+        uv = data['uv']
+        show = np.zeros((uv.shape[0],uv.shape[1],3))
+        show[:,:,:2] = uv
+        cv.imshow("uv", show)
     if 'normal_map' in data.files:
         normals = data['normal_map']
         normals = (normals + 1.) / 2
